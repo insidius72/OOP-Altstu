@@ -1,0 +1,439 @@
+
+import tkinter as tk
+from tkinter import messagebox, simpledialog
+from datetime import datetime
+
+class User:
+    def __init__(self, name, cash):
+        self.name = name
+        self.cash = cash
+        self.cards = {}
+
+# ======= Логика Банкомата =======
+class Card:
+    def __init__(self, card_number, pin, balance):
+        self.card_number = card_number
+        self.pin = pin
+        self.balance = balance
+        self.transaction_history = []
+
+    def check_pin(self, entered_pin):
+        return self.pin == entered_pin
+
+    def deposit(self, amount):
+        self.balance += amount
+        self.transaction_history.append(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - Пополнение: {amount}")
+
+    def get_balance(self):
+        return self.balance
+
+    def get_history(self):
+        return "\n".join(self.transaction_history) if self.transaction_history else "История пуста"
+
+
+class DebitCard(Card):
+    def withdraw(self, amount):
+        if self.balance >= amount:
+            self.balance -= amount
+            self.transaction_history.append(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - Снято: {amount}")
+            return True
+        return False
+
+    def transfer(self, amount, target_card):
+        if self.withdraw(amount):
+            target_card.deposit(amount)
+            self.transaction_history.append(
+                f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - Переведено {amount} на {target_card.card_number}")
+            target_card.transaction_history.append(
+                f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - Получено {amount} с {self.card_number}")
+            return True
+        return False
+
+
+class CreditCard(Card):
+    def __init__(self, card_number, pin, balance, credit_limit, interest_rate):
+        super().__init__(card_number, pin, balance)
+        self.credit_limit = credit_limit
+        self.interest_rate = interest_rate
+
+    def withdraw(self, amount):
+        if self.balance + self.credit_limit >= amount:
+            self.balance -= amount
+            self.transaction_history.append(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - Снято: {amount}")
+            return True
+        return False
+
+    def transfer(self, amount, target_card):
+        if self.withdraw(amount):
+            target_card.deposit(amount)
+            self.transaction_history.append(
+                f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - Переведено {amount} на {target_card.card_number}")
+            target_card.transaction_history.append(
+                f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - Получено {amount} с {self.card_number}")
+            return True
+        return False
+
+    def apply_interest(self):
+        if self.balance < 0:
+            penalty = abs(self.balance) * self.interest_rate / 100
+            self.transaction_history.append(
+                f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - Начислены проценты: {penalty}")
+
+
+# ======= Графический интерфейс =======
+class ATMGUI:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Банкомат")
+        self.root.geometry("700x800")
+        self.root.resizable(False, False)
+
+        user1 = User("Александр", 10000)
+        user2 = User("Мария", 15000)
+
+        user1_card1 = DebitCard("1111", "1234", 10000)
+        user1_card2 = DebitCard("3333", "5252", 5000000)
+
+        user2_card1 = CreditCard("2222", "5678", 70000, 5000, 5)
+        user2_card2 = DebitCard("4444", "9999", 20000)
+
+        user1.cards[user1_card1.card_number] = user1_card1
+        user1.cards[user1_card2.card_number] = user1_card2
+        user2.cards[user2_card1.card_number] = user2_card1
+        user2.cards[user2_card2.card_number] = user2_card2
+
+        self.card_records = {
+            user1_card1.card_number: (user1, user1_card1),
+            user1_card2.card_number: (user1, user1_card2),
+            user2_card1.card_number: (user2, user2_card1),
+            user2_card2.card_number: (user2, user2_card2),
+        }
+
+        self.current_user = None
+        self.current_card = None
+        self.attempts = 3
+
+        self.screen = tk.Label(root, text="Вставьте карту", font=("Arial", 14), bg="skyblue")
+        self.screen.pack(pady=20)
+        self.card_entry = tk.Entry(root, font=("Arial", 14), justify="center")
+        self.card_entry.pack()
+        self.card_entry.focus_set()
+        self.keyboard_frame = tk.Frame(root)
+        self.keyboard_frame.place(relx=0.5, rely=0.6, anchor=tk.CENTER)
+        self.above_keyboard_frame = tk.Frame(self.root, bg="skyblue", highlightbackground="black",
+                                             highlightthickness=0.5)
+        self.above_keyboard_frame.place(relx=0.5, rely=0.2, anchor=tk.CENTER, width=600, height=300)
+        self.above_keyboard_frame.lower()
+        for i in range(10):
+            button = tk.Button(self.keyboard_frame, text=str(i), font=("Arial", 14), width=6, height=2,
+                               command=lambda digit=i: self.add_digit(digit))
+            button.grid(row=i // 3, column=i % 3, padx=5, pady=5)
+
+        enter_button = tk.Button(self.keyboard_frame, text="Enter", font=("Arial", 14), width=6, height=2,
+                                 bg="green", fg="white", command=self.process_enter)
+        enter_button.grid(row=3, column=1, padx=5, pady=5)
+
+        cancel_button = tk.Button(self.keyboard_frame, text="Cancel", font=("Arial", 14), width=6, height=2,
+                                  bg="red", fg="white", command=self.delete_last_digit)
+        cancel_button.grid(row=3, column=2, padx=5, pady=5)
+
+    def add_digit(self, digit):
+        if hasattr(self, 'target_card_entry') and self.target_card_entry.focus_get() == self.target_card_entry:
+            self.target_card_entry.insert(tk.END, str(digit))
+        elif hasattr(self, 'amount_entry') and self.amount_entry.focus_get() == self.amount_entry:
+            self.amount_entry.insert(tk.END, str(digit))
+        elif hasattr(self, 'card_entry') and self.card_entry.focus_get() == self.card_entry:
+            self.card_entry.insert(tk.END, str(digit))
+        elif hasattr(self, 'pin_entry') and self.pin_entry.focus_get() == self.pin_entry:
+            self.pin_entry.insert(tk.END, str(digit))
+
+    def delete_last_digit(self):
+        if hasattr(self, 'target_card_entry') and self.target_card_entry.focus_get() == self.target_card_entry:
+            current_text = self.target_card_entry.get()
+            self.target_card_entry.delete(0, tk.END)
+            self.target_card_entry.insert(0, current_text[:-1])
+        elif hasattr(self, 'amount_entry') and self.amount_entry.focus_get() == self.amount_entry:
+            current_text = self.amount_entry.get()
+            self.amount_entry.delete(0, tk.END)
+            self.amount_entry.insert(0, current_text[:-1])
+        elif hasattr(self, 'card_entry') and self.card_entry.focus_get() == self.card_entry:
+            current_text = self.card_entry.get()
+            self.card_entry.delete(0, tk.END)
+            self.card_entry.insert(0, current_text[:-1])
+        elif hasattr(self, 'pin_entry') and self.pin_entry.focus_get() == self.pin_entry:
+            current_text = self.pin_entry.get()
+            self.pin_entry.delete(0, tk.END)
+            self.pin_entry.insert(0, current_text[:-1])
+
+    def process_enter(self):
+        if self.card_entry.winfo_ismapped():
+            self.insert_card()
+        elif hasattr(self, 'pin_entry') and self.pin_entry.winfo_ismapped():
+            self.enter_pin()
+
+    def insert_card(self):
+        card_number = self.card_entry.get()
+        if card_number in self.card_records:
+            self.current_user, self.current_card = self.card_records[card_number]
+            self.screen.config(text="Введите PIN")
+            self.card_entry.pack_forget()
+
+            self.pin_entry = tk.Entry(self.root, show="*", font=("Arial", 14), justify="center")
+            self.pin_entry.pack()
+            self.pin_entry.focus_set()
+
+            self.back_to_card_button = tk.Button(self.root, text="Назад", font=("Arial", 14), bg="red", fg="white",
+                                                 command=self.back_to_card)
+            self.back_to_card_button.pack(pady=10)
+        else:
+            messagebox.showerror("Ошибка", "Карта не найдена")
+
+    def back_to_card(self):
+        self.pin_entry.pack_forget()
+        if hasattr(self, 'back_to_card_button'):
+            self.back_to_card_button.pack_forget()
+        self.card_entry.delete(0, tk.END)
+        self.card_entry.pack()
+        self.card_entry.focus_set()
+        self.current_user = None
+        self.current_card = None
+        self.attempts = 3
+        self.screen.config(text="Вставьте карту")
+
+    def enter_pin(self):
+        if self.current_card:
+            if self.current_card.check_pin(self.pin_entry.get()):
+                if hasattr(self, 'back_to_card_button'):
+                    self.back_to_card_button.pack_forget()
+                self.show_menu()
+            else:
+                self.attempts -= 1
+                if self.attempts == 0:
+                    messagebox.showerror("Ошибка", "Карта заблокирована. Обратитесь в банк.")
+                    self.reset()
+                else:
+                    messagebox.showerror("Ошибка", f"Неверный PIN. Осталось попыток: {self.attempts}")
+                    self.pin_entry.focus_set()
+        else:
+            messagebox.showerror("Ошибка", "Нет активной карты. Вставьте карту заново.")
+
+
+    def reset(self):
+        self.current_card = None
+        self.current_user = None
+        self.attempts = 3
+        self.screen.config(text="Вставьте карту")
+        self.card_entry.delete(0, tk.END)
+        self.card_entry.pack()
+        self.card_entry.focus_set()
+        if hasattr(self, 'pin_entry'):
+            self.pin_entry.pack_forget()
+        if hasattr(self, 'back_to_card_button'):
+            self.back_to_card_button.pack_forget()
+        if hasattr(self, 'menu_frame'):
+            self.menu_frame.pack_forget()
+
+    def show_menu(self):
+        if hasattr(self, 'pin_entry'):
+            self.pin_entry.pack_forget()
+        self.screen.config(text=f"Здравствуйте, {self.current_user.name}!\nГлавное меню", font=("Arial", 18))
+        self.menu_frame = tk.Frame(self.root, bg="skyblue", width=700, height=200)
+        self.menu_frame.pack(pady=0)
+        button_width = 16
+        button_height = 2
+        tk.Button(self.menu_frame, text="Снять", font=("Arial", 14), width=button_width, height=button_height,
+                  command=self.withdraw, bg="lightblue").grid(row=0, column=0, padx=5, pady=4)
+        tk.Button(self.menu_frame, text="Перевести", font=("Arial", 14), width=button_width, height=button_height,
+                  command=self.transfer, bg="lightblue").grid(row=0, column=1, padx=5, pady=4)
+        tk.Button(self.menu_frame, text="Баланс", font=("Arial", 14), width=button_width, height=button_height,
+                  command=self.show_balance, bg="lightblue").grid(row=1, column=0, padx=5, pady=4)
+        tk.Button(self.menu_frame, text="Пополнить", font=("Arial", 14), width=button_width, height=button_height,
+                  command=self.deposit_funds, bg="lightblue").grid(row=1, column=1, padx=5, pady=4)
+        tk.Button(self.menu_frame, text="История", font=("Arial", 14), width=button_width, height=button_height,
+                  command=self.show_history, bg="lightblue").grid(row=2, column=0, padx=5, pady=4)
+        tk.Button(self.menu_frame, text="Отмена", font=("Arial", 14), width=button_width, height=button_height,
+                  command=self.cancel_operation, bg="lightblue").grid(row=2, column=1, padx=5, pady=4)
+
+    def withdraw(self):
+        self.menu_frame.pack_forget()
+        self.screen.config(text="Введите сумму для снятия")
+        self.amount_entry = tk.Entry(self.root, font=("Arial", 14), justify="center")
+        self.amount_entry.pack(pady=10)
+        self.amount_entry.focus_set()
+        self.confirm_button = tk.Button(self.root, text="Подтвердить", font=("Arial", 14), bg="green", fg="white",
+                                        command=self.confirm_withdraw)
+        self.confirm_button.pack(pady=10)
+        self.back_button = tk.Button(self.root, text="Назад к Главному меню", font=("Arial", 14), bg="red", fg="white",
+                                     command=self.back_to_main_menu)
+        self.back_button.pack(pady=10)
+
+    def confirm_withdraw(self):
+        try:
+            amount = int(self.amount_entry.get())
+            if amount <= 0:
+                messagebox.showerror("Ошибка", "Сумма должна быть положительной")
+            elif self.current_card.withdraw(amount):
+                self.current_user.cash += amount
+                messagebox.showinfo("Успех",
+                                    f"Снято {amount}.\nБаланс карты: {self.current_card.get_balance()}\nНаличные: {self.current_user.cash}")
+            else:
+                messagebox.showerror("Ошибка", "Недостаточно средств")
+        except ValueError:
+            messagebox.showerror("Ошибка", "Введите правильную сумму")
+        finally:
+            self.amount_entry.pack_forget()
+            self.confirm_button.pack_forget()
+            self.back_button.pack_forget()
+            self.show_menu()
+
+    def deposit_funds(self):
+        self.menu_frame.pack_forget()
+        self.screen.config(text="Введите сумму для пополнения")
+        self.amount_entry = tk.Entry(self.root, font=("Arial", 14), justify="center")
+        self.amount_entry.pack(pady=10)
+        self.amount_entry.focus_set()
+        self.confirm_button = tk.Button(self.root, text="Подтвердить", font=("Arial", 14), bg="green", fg="white",
+                                        command=self.confirm_deposit)
+        self.confirm_button.pack(pady=10)
+        self.back_button = tk.Button(self.root, text="Назад к Главному меню", font=("Arial", 14), bg="red", fg="white",
+                                     command=self.back_to_main_menu)
+        self.back_button.pack(pady=10)
+
+    def confirm_deposit(self):
+        try:
+            amount = int(self.amount_entry.get())
+            if amount <= 0:
+                messagebox.showerror("Ошибка", "Сумма должна быть положительной")
+            elif amount > self.current_user.cash:
+                messagebox.showerror("Ошибка", "Недостаточно наличных для пополнения")
+            else:
+                self.current_user.cash -= amount
+                self.current_card.deposit(amount)
+                messagebox.showinfo("Успех",
+                                    f"Пополнение выполнено.\nПополнено на {amount}.\nНовый баланс карты: {self.current_card.get_balance()}\nОстаток наличных: {self.current_user.cash}")
+        except ValueError:
+            messagebox.showerror("Ошибка", "Введите корректную сумму")
+        finally:
+            self.amount_entry.destroy()
+            self.confirm_button.destroy()
+            self.back_button.destroy()
+            self.show_menu()
+
+    def transfer(self):
+        self.menu_frame.pack_forget()
+        self.screen.config(text="Введите номер карты и сумму для перевода")
+        self.target_card_entry = tk.Entry(self.root, font=("Arial", 14), justify="center", fg="grey")
+        self.target_card_entry.insert(0, "Номер карты")
+        self.target_card_entry.pack(pady=10)
+        self.target_card_entry.bind("<FocusIn>",
+                                    lambda event: self.clear_placeholder(self.target_card_entry, "Номер карты"))
+        self.target_card_entry.bind("<FocusOut>",
+                                    lambda event: self.restore_placeholder(self.target_card_entry, "Номер карты"))
+        self.target_card_entry.focus_set()
+        self.amount_entry = tk.Entry(self.root, font=("Arial", 14), justify="center", fg="grey")
+        self.amount_entry.insert(0, "Сумма")
+        self.amount_entry.pack(pady=10)
+        self.amount_entry.bind("<FocusIn>", lambda event: self.clear_placeholder(self.amount_entry, "Сумма"))
+        self.amount_entry.bind("<FocusOut>", lambda event: self.restore_placeholder(self.amount_entry, "Сумма"))
+        self.confirm_button = tk.Button(self.root, text="Подтвердить", font=("Arial", 14), bg="green", fg="white",
+                                        command=self.confirm_transfer)
+        self.confirm_button.pack(pady=10)
+        self.back_button = tk.Button(self.root, text="Назад к Главному меню", font=("Arial", 14), bg="red", fg="white",
+                                     command=self.back_to_main_menu)
+        self.back_button.pack(pady=10)
+
+    def clear_placeholder(self, entry, placeholder):
+        if entry.get() == placeholder:
+            entry.delete(0, tk.END)
+            entry.config(fg="black")
+
+    def restore_placeholder(self, entry, placeholder):
+        if entry.get() == "":
+            entry.insert(0, placeholder)
+            entry.config(fg="grey")
+
+    def confirm_transfer(self):
+        try:
+            target_card_number = self.target_card_entry.get()
+            amount = int(self.amount_entry.get())
+            if target_card_number == self.current_card.card_number:
+                messagebox.showerror("Ошибка", "Нельзя переводить с одной и той же карты самому себе")
+            elif target_card_number in self.card_records and self.current_card.transfer(amount, self.card_records[
+                target_card_number][1]):
+                messagebox.showinfo("Успех", f"Переведено {amount} на карту {target_card_number}")
+            else:
+                messagebox.showerror("Ошибка", "Неверные данные или недостаточно средств")
+        except ValueError:
+            messagebox.showerror("Ошибка", "Введите корректные данные")
+        finally:
+            self.target_card_entry.destroy()
+            self.amount_entry.destroy()
+            self.confirm_button.destroy()
+            self.back_button.destroy()
+            self.show_menu()
+
+    def back_to_main_menu(self):
+        temp_widgets = ["history_frame", "balance_label", "history_label", "back_button",
+                        "amount_entry", "target_card_entry", "confirm_button"]
+        for widget_name in temp_widgets:
+            widget = getattr(self, widget_name, None)
+            if widget is not None and widget.winfo_exists():
+                widget.destroy()
+                setattr(self, widget_name, None)
+        self.show_menu()
+
+    def show_balance(self):
+        self.menu_frame.pack_forget()
+        self.screen.config(text="Баланс счета")
+        if isinstance(self.current_card, CreditCard):
+            balance_info = f"Ваш баланс: {self.current_card.get_balance()}\n"
+            if self.current_card.get_balance() < 0:
+                penalty = abs(self.current_card.get_balance()) * self.current_card.interest_rate / 100
+                balance_info += f"Кредитный лимит: {self.current_card.credit_limit}\n"
+                balance_info += f"Пеня: {penalty:.2f}\n"
+                balance_info += f"Процентная ставка: {self.current_card.interest_rate}%\n"
+        else:
+            balance_info = f"Ваш баланс: {self.current_card.get_balance()}"
+        self.balance_label = tk.Label(self.root, text=balance_info, font=("Arial", 14), justify="center", bg="skyblue")
+        self.balance_label.pack(pady=20)
+        self.back_button = tk.Button(self.root, text="Назад к Главному меню", font=("Arial", 14), bg="red", fg="white",
+                                     command=self.back_to_main_menu)
+        self.back_button.pack(pady=10)
+
+    def show_history(self):
+        self.menu_frame.pack_forget()
+        self.screen.config(text="История операций")
+        history_frame = tk.Frame(self.root, bg="skyblue", height=800)
+        history_frame.pack(pady=0)
+
+        scrollbar = tk.Scrollbar(history_frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        history_text = tk.Text(history_frame, font=("Arial", 12), width=50, height=10, wrap=tk.WORD,
+                               yscrollcommand=scrollbar.set, bg="skyblue")
+        history = self.current_card.get_history()
+        history_text.insert(tk.END, history)
+        history_text.config(state=tk.DISABLED)
+        history_text.pack(side=tk.LEFT, fill=tk.BOTH)
+
+        scrollbar.config(command=history_text.yview)
+        self.history_frame = history_frame
+
+        self.back_button = tk.Button(self.root, text="Назад к Главному меню", font=("Arial", 14),
+                                     bg="red", fg="white", command=self.back_to_main_menu)
+        self.back_button.pack(pady=10)
+
+    def cancel_operation(self):
+        messagebox.showinfo("Отмена", "Операция отменена")
+        self.menu_frame.pack_forget()
+        self.current_card = None
+        self.current_user = None
+        self.screen.config(text="Вставьте карту")
+        self.card_entry.delete(0, tk.END)
+        self.card_entry.pack()
+        self.card_entry.focus_set()
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    atm = ATMGUI(root)
+    root.mainloop()
